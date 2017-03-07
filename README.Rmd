@@ -1,7 +1,7 @@
 ---
 title: "Problem Set 3. Due Thurs March 2 5pm"
-author: "Student name"
-date: "Feb 23, 2017"
+author: "Casey Martin"
+date: "March 1, 2017"
 output: html_document
 ---
 
@@ -43,6 +43,8 @@ First we need load the data.
 
 ```{r load_raw_data, message = FALSE}
 library(tidyverse)
+library(stringr)
+library(ggplot2)
 
 # bgh data
 bgh_url <- 'http://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE43163&format=file&file=GSE43163_CompleteCountTable_Bgh.txt.gz'
@@ -61,56 +63,53 @@ raw_data <- as_data_frame(raw_data)
 
 ## Problem 1
 
-Now that the raw data are loaded, your first task is to tidy the data with `tidyr`. The `cleaned_data` should look something like this:
-
-```
-# A tibble: 310,896 × 6
-             gene.name plant fungus time.point   rep value
-*                <chr> <chr>  <chr>      <chr> <chr> <int>
-1             bgh04079   B12     A6       6hpi     1    13
-2             bgh01634   B12     A6       6hpi     1    31
-3  bghG000012000001001   B12     A6       6hpi     1   121
-4  bghG000012000002001   B12     A6       6hpi     1     3
-5             bgh00757   B12     A6       6hpi     1   253
-6             bgh01273   B12     A6       6hpi     1    45
-7             bgh01274   B12     A6       6hpi     1    32
-8             bgh01277   B12     A6       6hpi     1     9
-9             bgh06140   B12     A6       6hpi     1    47
-10            bgh05774   B12     A6       6hpi     1    42
-# ... with 310,886 more rows
-```
 
 The key steps are to `gather()` the data into key-value pairs and then `separate()` the information from the key column into new columns.
 
 ```{r problem_1}
-# add tidying code here
+raw_data %>% 
+  gather(raw_data, value, -gene.name) %>%
+  separate(raw_data, c('plant', 'fungus', 'time.point', 'rep'), sep = "_") -> tidy_data
 
-# report the cleaned_data by just naming it, uncomment the following line:
-# cleaned_data
+myanswer1 = tidy_data
+
+print(myanswer1)
 ```
 
-## Problem 3
+## Problem 2
 
 You need to translate what you learned on the command line into the R world.
 
 Which plant has the highest expression of any gene in the 6hpi time point?
 
 ```{bash, eval=FALSE}
-raw_data | awk '$4 == "6hpi"' | sort -k6nr | head -n 1 | cut -f2
+#raw_data | awk '$4 == "6hpi"' | sort -k6nr | head -n 1 | cut -f2
 ```
 
 ```{r}
-# translate to dplyr code
+tidy_data %>%
+  filter(time.point == '6hpi') %>%
+  arrange(desc(value)) -> tidy_sorted6h
+
+myanswer2a = tidy_sorted6h[1,2]
+
+print(myanswer2a)
 ```
 
 Which plant / fungus pair has the highest expression in the 18hpi time point?
 
 ```{bash, eval=FALSE}
-raw_data | awk '$4 == "18hpi"' | sort -k6nr | head -n 1 | cut -f2,3
+#raw_data | awk '$4 == "18hpi"' | sort -k6nr | head -n 1 | cut -f2,3
 ```
 
 ```{r}
-# translate to dplyr code
+tidy_data %>%
+  filter(time.point == '18hpi') %>%
+  arrange(desc(value)) -> tidy_sorted18h
+
+myanswer2b= tidy_sorted6h[1, 2:3]
+
+print(myanswer2b)
 ```
 
 ## Problem 3
@@ -125,10 +124,10 @@ Identify the top 3 most consistently differentially expressed genes between the 
 
 1. Create a new table from the cleaned data by moving each `hpi` value to a new column name, with counts for each in the column (hint: use a `tidyr` verb). It is helpful to reformat the `hpi` values by converting from e.g. `6hpi` to `hpi.6`. You can use `mutate` to do this, i.e.:
 
-```{r reformat_time, eval=FALSE}
-cleaned_data %>%
+```{r reformat_time, eval=TRUE}
+tidy_data %>%
   mutate(time.value = str_replace(time.point, 'hpi', ''),
-         time.hpi = str_c('hpi.', time.value))
+    time.hpi = str_c('hpi.', time.value)) -> tidy_data
 ```
 
 2. Create a new column containing the expression difference between the relevant time points.
@@ -138,11 +137,52 @@ cleaned_data %>%
 4. Sort by these statistics and use the `dplyr` verb `slice` to pull the ones you want (i.e., the top 3). Note you will have to remove `gene.name` from the grouping so that sorting works.
 
 ```{r problem_3}
+
+### returns normalized foldchange for a given timepoint
+foldchange_normal <- function(x, mytime.hpi)  {
+  x %>%
+    filter(time.hpi == "hpi.6" | time.hpi == mytime.hpi) %>%
+    group_by(gene.name, plant, fungus, rep) %>%
+    summarize(foldchange = log((value[time.hpi == mytime.hpi] + 0.01)/(value[time.hpi == "hpi.6"] + 0.01), 2)) %>%
+    group_by(gene.name, plant, fungus) %>%
+    summarize(foldchange_mean = mean(foldchange), foldchange_abs = abs(foldchange_mean),
+              foldchange_var = var(abs(foldchange))) %>%
+    mutate(time.hpi = mytime.hpi) -> mytidy_foldchange
+  return(mytidy_foldchange)
+}
+mytimepoints = (unique(tidy_data$time.hpi)[-1])
+
+### for loops are ugly, but I couldn't figure out why sapply returns a list of distorted tibbles
+# sapply(mytimepoints, function(x) foldchange_normal(tidy_data, x)))
+tidy_foldchange = data_frame()
+for (i in 1:length(mytimepoints)){
+  tidy_foldchange = bind_rows(tidy_foldchange, foldchange_normal(tidy_data, mytimepoints[i]))
+}
+
+# sets threshhold for subsetting top 1% mean foldchange_abs.
+top_quantile = function(myarray, myquantile){
+return(rev(quantile(myarray, probs = seq(0, 1, myquantile)))[2])
+}
+
+# subset the top 1% mean foldchange_abs and sort by lowest foldchange_var
+tidy_foldchange %>%
+  arrange(desc(foldchange_abs)) %>%
+  group_by(gene.name, plant, fungus) %>%
+  filter(foldchange_abs >= top_quantile(foldchange_abs, 0.01)) %>%
+  arrange(foldchange_var) %>%
+  group_by(plant, fungus) %>%
+  slice(1:3) -> top_consistent
+
+myanswer3 = top_consistent
+  
+
+print(myanswer3)
 ```
 
 ## Problem 4
 
-Now examine the above final data frame above and write a few sentences putting inline code in least 3 places. For example, There are `r nrow(mtcars)` rows of data in `mtcars`.
+The above table highlights the top 3 most consistently differentially expressed genes in pairwise infections of *Arabidopsis* (`r unique(myanswer3$plant)`) and *Bgh* (`r unique(myanswer3$fungus)`). `r sum(myanswer3$foldchange_mean > 0)` genes were upregulated and `r sum(myanswer3$foldchange_mean < 0)` were downregulated.
+
 
 ## Problem 5
 
@@ -159,4 +199,18 @@ Plot the expression (`value`) by time (`hpi`) for the above genes. Format the pl
 Extra credit: add error bars to the plot (use `geom_errorbar`).
 
 ```{r problem_5}
+# is there a dplyr way to filter one tibble by another tibble?
+myanswer5 <- merge(tidy_foldchange, myanswer3, by = c('gene.name', 'plant', 'fungus'))[1:7]
+myanswer5$time.hpi.x <- as.numeric(gsub("hpi\\.", "", myanswer5$time.hpi.x))
+
+
+
+myplot <- ggplot(myanswer5, aes(x = time.hpi.x, y = foldchange_mean.x, colour = gene.name))
+myplot <- myplot + geom_point() + geom_smooth(method = 'lm', se = FALSE) + facet_grid(plant ~ fungus) + theme_bw()
+myplot <- myplot + labs(x = "Hours Post Infection", y = "Transcript Foldchange", title = 'B. graminis gene expression during Arabidopsis infections')
+myplot <- myplot + geom_errorbar(aes(ymin = foldchange_mean.x-foldchange_var.x/2, ymax = foldchange_mean.x+foldchange_var.x/2))
+myplot <- myplot + ylim(-20,20)
+
+
+print(myplot)
 ```
